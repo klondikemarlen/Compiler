@@ -33,9 +33,8 @@ def analyze(path):
                 else:
                     token_type = None
                     token = None
-                if token:
-                    f.write('<{type}> {token} </{type}>'.format(token=token, type=token_type))
-                    f.write(os.linesep)
+                f.write('<{type}> {token} </{type}>'.format(token=token, type=token_type))
+                f.write(os.linesep)
                 # print(jt.token)
             f.write("</tokens>")
             f.write(os.linesep)

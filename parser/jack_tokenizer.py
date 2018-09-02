@@ -25,6 +25,7 @@ class JackTokenizer:
         """
         self.fd = open(file)
         self.token = ""
+        self._next_token = ""
         self.token_queue = []  # first in first out (fifo) queue
         self.token_cache = {}
         self.more_tokens = True
@@ -74,18 +75,22 @@ class JackTokenizer:
 
         Only returns non-empty tokens.
         Output is delayed to accommodate comments.
+        Output is delayed to accommodate while loop.
         """
 
         for line in self.next_clean_line():
             # These 2 lines do ALL the work!
             tokens = patterns.ALL_TERMINATORS.finditer(line)
             self.token_queue = itertools.chain(self.token_queue, tokens)
+        # import pdb;pdb.set_trace()
         try:
-            self.token = next(self.token_queue).group(0)
+            self.token = self._next_token or next(self.token_queue).group(0)
+            self._next_token = next(self.token_queue).group(0)
         except StopIteration:
-            self.token = ''
-            self.fd.close()
+            self._next_token = ''
+        if not self._next_token:
             self.more_tokens = False
+            self.fd.close()
 
     def token_type(self):
         """Returns the type of the current token.
