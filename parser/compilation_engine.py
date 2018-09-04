@@ -7,6 +7,10 @@ class CompileError(Exception):
     pass
 
 
+class CompileKeyError(CompileError):
+    pass
+
+
 class PlusEqualsableIterator:
     def __init__(self):
         self._iter = (x for x in [])
@@ -81,17 +85,22 @@ class CompilationEngine:
         # write start of element body
         self.write_non_terminal_start(current_element)
 
-        more_vars = True
-        while more_vars:  # step 4 - classVarDec*
-            self.compile_class_var_dec()  # step 4.i - classVarDec
-            if f.symbol() in ['constructor', 'function', 'method']:
-                more_vars = False
+        # Need to advance once on outside of loop.
+        # This is so that compile_class_var_dec can fail without
+        # pulling and extra token.
+        while True:  # step 4 - classVarDec*
+            f.advance()  # ok maybe inside the loop?
+            try:
+                self.compile_class_var_dec()  # step 4.i - classVarDec
+            except CompileKeyError:
+                break
 
-        more_subs = True
-        while more_subs:  # step 5 - subroutineDec*
-            self.compile_subroutine()  # step 5.i - subroutineDec
-            if f.symbol == '}':
-                more_subs = False
+        # This compile has a dead first step too!
+        while True:  # step 5 - subroutineDec*
+            try:
+                self.compile_subroutine()  # step 5.i - subroutineDec
+            except CompileKeyError:
+                break
 
         self.add_symbols(['}'])  # step 6 - '}'
 
@@ -102,12 +111,15 @@ class CompilationEngine:
         """Compiles a static declaration or a field declaration.
 
         classVarDec: ('static' | 'field) type varName (, varName)* ';'
+
+        NOTE: first step of first function is smothered ... this is so it
+        can fail without advancing!
         """
 
         f = self._infile
         current_element = "classVarDec"
 
-        self.add_keywords(['static', 'field'])  # step 1 - ('static' | 'field)
+        self.add_keywords(['static', 'field'], step=False)  # step 1 - ('static' | 'field)
         self.add_type()  # step 2 - type
         self.add_identifier('variable name')  # step 3 - varName
 
@@ -128,10 +140,13 @@ class CompilationEngine:
         """Compiles a complete method, function or constructor.
 
         subroutineDec: ('constructor' | 'function' | 'method') ('void' | type) subroutineName '(' parameterList ')' subroutineBody
+
+        NOTE: first step of first function is smothered ... this is so it
+        can fail without advancing!
         """
         current_element = "subroutineDec"
 
-        self.add_keywords(['constructor', 'function', 'method'])
+        self.add_keywords(['constructor', 'function', 'method'], step=False)
         self.add_type(void=True)
         self.add_identifier('subroutine name')
         self.add_symbols(['('])
@@ -149,7 +164,12 @@ class CompilationEngine:
         self.write_non_terminal_end(current_element)  # write body end
 
     def compile_parameter_list(self):
-        """Compiles a (possibly empty) parameter list, not including the enclosing '( )'."""
+        """Compiles a (possibly empty) parameter list, not including the enclosing '( )'.
+
+        parameterList: ((type varName)(',' type varName)*)?
+        """
+
+
 
     def compile_var_dec(self):
         """Compiles a `var` declaration."""
@@ -186,18 +206,19 @@ class CompilationEngine:
     def compile_expression_list(self):
         """Compiles a (possibly empty) comma-separated list of expressions."""
 
-    def add_keywords(self, keywords):
+    def add_keywords(self, keywords, step=True):
         """Add keyword(s) definition to body element."""
         f = self._infile
 
-        # if keywords == ['constructor', 'function', 'method']: import pdb;pdb.set_trace()
-        f.advance()
+        if step:
+            f.advance()
+
         if f.token_type() == token_types.KEYWORD and any([f.key_word() == f.KEYWORDS_TABLE[key] for key in keywords]):
             terminal = f.NAMES_TABLE[f.key_word()]
             self._body += ['keyword', terminal]
         else:
             expected = "| ".join(["'{}'".format(key) for key in keywords])
-            raise CompileError("Expected {}".format(expected))
+            raise CompileKeyError("Expected {}".format(expected))
 
     def add_symbols(self, symbols, step=True):
         """Add symbol definition to body element."""
@@ -212,11 +233,13 @@ class CompilationEngine:
             expected = "| ".join(["'{}'".format(sym) for sym in symbols])
             raise CompileError("Expected {}".format(expected))
 
-    def add_identifier(self, identifier):
+    def add_identifier(self, identifier, step=True):
         """Add identifier definition to body element."""
         f = self._infile
 
-        f.advance()
+        if step:
+            f.advance()
+
         if f.token_type() == token_types.IDENTIFIER:
             self._body += ['identifier', f.identifier()]
         else:

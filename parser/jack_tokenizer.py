@@ -83,7 +83,7 @@ class JackTokenizer:
         self.token_queue = []  # first in first out (fifo) queue
         self.token_cache = {}
         self.more_tokens = True
-        self.line_number = 0
+        self.line_number = 1
 
     def has_more_tokens(self):
         """Do we have more tokens in input?"""
@@ -104,8 +104,7 @@ class JackTokenizer:
         inside_block_comment = False
         block_comment = ""
 
-        for index, line in enumerate(self.fd):
-            self.line_number = index
+        for line in self.fd:
             if patterns.BLOCK_COMMENT_START.search(line):
                 inside_block_comment = True
             if inside_block_comment:
@@ -142,6 +141,7 @@ class JackTokenizer:
             # import pdb;pdb.set_trace()
             try:
                 self.token = self._next_token or next(self.token_queue).group(0)
+                self.line_number += 1
                 self._next_token = next(self.token_queue).group(0)
             except StopIteration:
                 self._next_token = ''
