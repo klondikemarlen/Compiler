@@ -26,7 +26,12 @@ FALSE = 25
 NULL = 26
 THIS = 27
 
+
 # Useful modification loop .. use outside of file.
+# NOTE: you need to comment out both *_TABLE before running.
 # import parser.utils.token_types as token_types
 # for key, value in sorted([(key, getattr(token_types, key)) for key in dir(token_types) if key[0] != "_"], key=lambda x: x[1]):
 #         print(key, "=", value+1)
+
+# for key, value in sorted([(key, getattr(token_types, key)) for key in dir(token_types) if key[0] != "_"], key=lambda x: x[1]):
+#         print("{}: '{}',".format(key, key.lower()))

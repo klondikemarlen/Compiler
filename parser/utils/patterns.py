@@ -35,6 +35,8 @@ IDENTIFIER = re.compile(
 # noinspection RegExpDuplicateAlternationBranch
 ALL_TERMINATORS = re.compile('({})|({})|({})|({})|({})'.format(KEYWORD.pattern, SYMBOL.pattern, INT_CONST.pattern, STRING_CONST.pattern, IDENTIFIER.pattern))
 
+# XML_ELEMENT = re.compile('<(\w*)> .* </\\1>')
+
 
 if __name__ == "__main__":
     assert SYMBOL.fullmatch("\\") is None
@@ -68,13 +70,15 @@ if __name__ == "__main__":
     assert IDENTIFIER.fullmatch('') is None
     assert IDENTIFIER.fullmatch(';.') is None
 
-    keywords = KEYWORD.findall('class Main {')
-    symbols = SYMBOL.findall('class Main {')
-    ints = INT_CONST.findall('class Main {')
-    strings = STRING_CONST.findall('class Main {')
-    ids = IDENTIFIER.findall('class Main {')
-    print(keywords)
-    print(symbols)
-    print(ints)
-    print(strings)
-    print(ids)
+    # keywords = KEYWORD.findall('class Main {')
+    # symbols = SYMBOL.findall('class Main {')
+    # ints = INT_CONST.findall('class Main {')
+    # strings = STRING_CONST.findall('class Main {')
+    # ids = IDENTIFIER.findall('class Main {')
+    # print(keywords)
+    # print(symbols)
+    # print(ints)
+    # print(strings)
+    # print(ids)
+
+    print(XML_ELEMENT.fullmatch('<keyword> class </keyword>').group(1))
