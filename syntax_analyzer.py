@@ -5,7 +5,8 @@ import xml.etree.ElementTree as ET
 
 # generate xml code using jack_tokenizer and compilation engine.
 from parser.jack_tokenizer import JackTokenizer
-from parser.compilation_engine import CompilationEngine, CompileError
+from parser.compilation_engine import CompilationEngine
+from parser.utils.exceptions import CompileError
 
 
 def analyze(path):

@@ -1,33 +1,20 @@
-import itertools
-
 from parser.utils import token_types
-
-
-class CompileError(Exception):
-    pass
-
-
-class CompileKeyError(CompileError):
-    pass
-
-
-class PlusEqualsableIterator:
-    def __init__(self):
-        self._iter = (x for x in [])
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        return next(self._iter)
-
-    def __iadd__(self, other):
-        # import pdb;pdb.set_trace()
-        self._iter = itertools.chain(self._iter, [other])
-        return self
-
-    def __repr__(self):
-        return "<{} at {}>".format(self.__class__.__name__, hex(id(self)))
+from parser.utils.fancy_objects import PlusEqualsableIterator
+from parser.utils.exceptions import (
+    CompileError,
+    CompileKeywordError,
+    CompileSymbolError,
+    CompileTypeError,
+    CompileClassVarDecError,
+    CompileSubroutineError,
+    CompileParameterListError,
+    CompileSubroutineBodyError,
+    CompileVarDecError,
+    CompileLetError,
+    CompileExpressionError,
+    CompileOpError,
+    CompileKeywordConstantError,
+)
 
 
 class CompilationEngine:
@@ -75,7 +62,6 @@ class CompilationEngine:
 
         class: 'class' className '{' classVarDec* subroutineDec* '}'
         """
-        f = self._infile
         current_element = 'class'
 
         self.add_keywords([current_element])  # step 1 - 'class'
@@ -85,24 +71,22 @@ class CompilationEngine:
         # write start of element body
         self.write_non_terminal_start(current_element)
 
-        # Need to advance once on outside of loop.
-        # This is so that compile_class_var_dec can fail without
-        # pulling and extra token.
         while True:  # step 4 - classVarDec*
-            f.advance()  # ok maybe inside the loop?
             try:
                 self.compile_class_var_dec()  # step 4.i - classVarDec
-            except CompileKeyError:
+            except CompileKeywordError:
                 break
 
-        # This compile has a dead first step too!
+        # This compile has a dead first step!
         while True:  # step 5 - subroutineDec*
             try:
                 self.compile_subroutine()  # step 5.i - subroutineDec
-            except CompileKeyError:
+            except CompileKeywordError:
                 break
 
-        self.add_symbols(['}'])  # step 6 - '}'
+        # Since the previous function stepped ahead on fail ...
+        # don't step here.
+        self.add_symbols(['}'], step=False)  # step 6 - '}'
 
         # write end of element body
         self.write_non_terminal_end(current_element)
@@ -111,55 +95,48 @@ class CompilationEngine:
         """Compiles a static declaration or a field declaration.
 
         classVarDec: ('static' | 'field) type varName (, varName)* ';'
-
-        NOTE: first step of first function is smothered ... this is so it
-        can fail without advancing!
         """
 
-        f = self._infile
-        current_element = "classVarDec"
-
-        self.add_keywords(['static', 'field'], step=False)  # step 1 - ('static' | 'field)
-        self.add_type()  # step 2 - type
-        self.add_identifier('variable name')  # step 3 - varName
-
-        # step 4/5 - (',' varName)* ';'
-        # I merged these steps for convenience.
-        more_vars = True
-        while more_vars:
-            self.add_symbols([',', ';'])  # (',' varName)* ';'
-            if f.symbol() == ';':
-                more_vars = False
-            else:
-                self.add_identifier('variable name')
+        self.add_keywords(['static', 'field'])  # step 1 - ('static' | 'field)
+        try:
+            self.add_type_var_name_var_name()  # step 2-5 - type varName (, varName)* ';'
+        except CompileError as ex:
+            raise CompileClassVarDecError("Expected a complete static  or a field declaration: " + str(ex))
 
         # write element body
-        self.write_non_terminal(current_element)
+        self.write_non_terminal("classVarDec")
 
     def compile_subroutine(self):
         """Compiles a complete method, function or constructor.
 
         subroutineDec: ('constructor' | 'function' | 'method') ('void' | type) subroutineName '(' parameterList ')' subroutineBody
 
-        NOTE: first step of first function is smothered ... this is so it
-        can fail without advancing!
+        NOTE: first step of first function is smothered.
+        This is because the previous function failed + advanced an
+        extra time.
         """
         current_element = "subroutineDec"
 
+        # Previous call stepped ahead and extra time so don't step here.
         self.add_keywords(['constructor', 'function', 'method'], step=False)
-        self.add_type(void=True)
-        self.add_identifier('subroutine name')
-        self.add_symbols(['('])
 
-        self.write_non_terminal_start(current_element)  # write body start
+        try:
+            self.add_type(void=True)
+            self.add_identifier('subroutine name')
+            self.add_symbols(['('])
 
-        self.compile_parameter_list()  # new non-terminal
+            self.write_non_terminal_start(current_element)  # write body start
 
-        # Needs special write call as this appears between two non-terminals
-        self.add_symbols([')'])
-        self.write_terminal(*next(self._body), indent=True)
+            self.compile_parameter_list()  # new non-terminal
 
-        self.compile_statements()  # ??
+            # Previous method stepped ahead on fail so don't step here.
+            # Needs special write call as this appears between two non-terminals?
+            self.add_symbols([')'], step=False)
+            self.write_terminal(*next(self._body), indent=True)
+
+            self.compile_subroutine_body()
+        except CompileError as ex:
+            raise CompileSubroutineError("Expected a complete method, function or constructor declaration: " + str(ex))
 
         self.write_non_terminal_end(current_element)  # write body end
 
@@ -169,20 +146,140 @@ class CompilationEngine:
         parameterList: ((type varName)(',' type varName)*)?
         """
 
+        while True:
+            try:
+                self.add_type()  # step 1 - type
+            except CompileTypeError:
+                break
 
+            # If first case passes this one has to exist
+            # This is the only real step to error check on.
+            try:
+                self.add_identifier('variable name')  # step 2 - varName
+            except CompileError as ex:
+                raise CompileParameterListError("Expected a complete parameter list declaration: " + str(ex))
+            try:
+                self.add_symbols([','])
+            except CompileSymbolError:
+                break
+
+        self.write_non_terminal("parameterList")
 
     def compile_var_dec(self):
-        """Compiles a `var` declaration."""
+        """Compiles a `var` declaration.
+
+        varDec: 'var' type varName (',' varName)* ';'
+        """
+
+        self.add_keywords(['var'])
+        try:
+            self.add_type_var_name_var_name()
+        except CompileError as ex:
+            raise CompileVarDecError("Expected a complete variable declaration: " + str(ex))
+        self.write_non_terminal('varDec')
+
+    def compile_subroutine_body(self):
+        """Compiles a subroutine body.
+
+        subroutineBody: '{' varDec* statements '}'
+        """
+
+        current_element = "subroutineBody"
+
+        try:
+            self.add_symbols(['{'])
+            self.write_non_terminal_start(current_element)
+
+            while True:
+                try:
+                    self.compile_var_dec()
+                except CompileKeywordError:
+                    break
+
+            self.compile_statements()
+
+            self.add_symbols(['}'])
+        except CompileError as ex:
+            raise CompileSubroutineBodyError("Expected a complete subroutine body declaration: " + str(ex))
+        self.write_non_terminal_end(current_element)
 
     def compile_statements(self):
         """Compiles a sequence of statements, not including the enclosing '{ }'.
+
+        statements: statement*
+        statement: letStatement | ifStatement | whileStatement | doStatement |
+            returnStatement
         """
+
+        f = self._infile
+        current_element = "statements"
+
+        self.write_non_terminal_start(current_element)
+
+        # import pdb;pdb.set_trace()
+        # Make first statement of each not step!
+        if f.token_type() == token_types.KEYWORD:
+            if f.key_word() == token_types.LET:
+                self.compile_let()
+            elif f.key_word() == token_types.IF:
+                self.compile_if()
+            elif f.key_word() == token_types.WHILE:
+                self.compile_while()
+            elif f.key_word() == token_types.DO:
+                self.compile_do()
+            elif f.key_word() == token_types.RETURN:
+                self.compile_return()
+            else:
+                raise CompileKeywordError("Expected let | if | while | do | return")
+        else:
+            raise CompileTypeError("Expected a statement")
+        # f.advance()
+        # print("working out statements", f.token)
+
+        # big if tree! plus LL(1)?
+        self.write_non_terminal_end(current_element)
 
     def compile_do(self):
         """Compiles a `do` statement."""
 
     def compile_let(self):
-        """Compiles a `let` statement."""
+        """Compiles a `let` statement.
+
+        letStatement: 'let' varName ('[' expression ']')? = expression ';'
+        """
+
+        current_element = 'letStatement'
+
+        print("working out statements:", self._infile.token)
+
+        try:
+            self.add_keywords(['let'], step=False)
+            self.add_identifier('variable name')
+            self.write_non_terminal_start(current_element)
+
+            # optional expression
+            safe_to_step = True
+            try:
+                self.add_symbols('[')
+            except CompileSymbolError:
+                safe_to_step = False
+
+            # These should run as long as the previous step passes!
+            if safe_to_step:
+                self.compile_expression()
+                self.add_symbols(']')
+
+            # as previous expression might fail - but still advance - don't step?
+            # requires special write method
+            self.add_symbols(['='], step=safe_to_step)
+        except CompileError as ex:
+            raise CompileLetError("Expected a complete let statement: ", str(ex))
+        self.write_terminal(*next(self._body), indent=True)
+
+        self.compile_expression()
+
+        self.add_symbols([';'])
+        self.write_non_terminal_end(current_element)
 
     def compile_while(self):
         """Compiles a `while` statement."""
@@ -195,16 +292,132 @@ class CompilationEngine:
         """
 
     def compile_expression(self):
-        """Compiles an `expression`."""
+        """Compiles an `expression`.
+
+        term (op term)*
+        """
+
+        current_element = "expression"
+        self.write_non_terminal_start(current_element)
+
+        try:
+            self.compile_term()
+
+            while True:
+                try:
+                    self.add_op_or_unary_op()
+                except CompileSymbolError:
+                    break
+                self.compile_term()
+        except CompileError as ex:
+            raise CompileExpressionError("Expected a complete expression: " + str(ex))
+        self.write_non_terminal_end(current_element)
 
     def compile_term(self):
         """Compiles a `term`.
 
         This routine is faced with a slight difficulty when trying to decide between some of the alternative parsing rules. Specifically, if the current token is an identifier, the routine must distinguish between a variable, an array entry, and a subroutine call. A single look-ahead token, which may be one of "[", "{" or "." suffices to distinguish between the three possibilities. Any other token is not part of this term and should not be advanced over.
+
+        term: integerConstant | stringConstant | keywordConstant | varName | varName '[' expression ']' | subroutineCall | '(' expression ')' | unaryOp term
         """
+        f = self._infile
+
+        f.advance()
+        if f.token_type() == token_types.INT_CONST:
+            self._body += ['integerConstant', f.int_const()]
+        elif f.token_type() == token_types.STRING_CONST:
+            self._body += ['stringConstant', f.int_const()]
+        elif f.token_type() == token_types.KEYWORD:
+            self.add_keyword_constant(step=False)
+        elif f.token_type() == token_types.IDENTIFIER:
+            # detect subroutine call!
+
+            # save current state ... read ahead 1 ?
+            self.add_identifier('variable name')
+            try:
+                self.add_symbols('[')
+                self.compile_expression()
+                self.add_symbols(']')
+            except CompileSymbolError:
+                pass  # safe_to_step=False?
+        elif f.token_type() == token_types.SYMBOL:
+            if f.symbol() == '(':
+                self.add_symbols('(')
+                self.compile_expression()
+                self.add_symbols(')')
+            elif f.symbol() in ['-', '~']:
+                self.add_op_or_unary_op(unary=True)
+                self.compile_term()
 
     def compile_expression_list(self):
         """Compiles a (possibly empty) comma-separated list of expressions."""
+
+    def add_subroutine_call(self):
+        """Add a subroutine call.
+
+        subroutineCall: subroutineName '(' expressionList ')' | (className | varName) '.' subroutineName '(' expressionList ')'
+        """
+
+    def add_keyword_constant(self, step=True):
+        try:
+            self.add_keywords(['true', 'false', 'null', 'this'], step=step)
+        except CompileError as ex:
+            raise CompileKeywordConstantError("Expected a keyword constant: ", str(ex))
+
+    def add_op_or_unary_op(self, unary=False):
+        """Add an operator (symbol).
+
+        op: '+' | '-' | '*' | '/' | '&' | '|' | '<' | '>' | '='
+        """
+        try:
+            if unary:
+                self.add_symbols(['-', '~'])
+            else:
+                self.add_symbols(['+', '-', '*', '/', '&', '|', '<', '>', '='])
+        except CompileError as ex:
+            raise CompileOpError("Expected an operator: " + str(ex))
+
+    def add_type_var_name_var_name(self):
+        """Add a type variable name list declaration.
+
+        type varName (',' varName)* ;
+        """
+
+        f = self._infile
+        self.add_type()  # step 1 - type
+        self.add_identifier('variable name')  # step 2 - varName
+
+        # step 3/4 - (',' varName)* ';'
+        # I merged these steps for convenience.
+        more_vars = True
+        while more_vars:
+            self.add_symbols([',', ';'])  # (',' varName)* ';'
+            if f.symbol() == ';':
+                more_vars = False
+            else:
+                self.add_identifier('variable name')
+
+    def add_type(self, void=False, step=True):
+        """Add a type declaration.
+
+        type: 'int' | 'char' | 'boolean' | className
+        """
+        f = self._infile
+        valid_types = [token_types.INT, token_types.CHAR, token_types.BOOLEAN]
+        if void:
+            valid_types.append(token_types.VOID)
+
+        if step:
+            f.advance()
+
+        if f.token_type() == token_types.KEYWORD and any([f.key_word() == type_ for type_ in valid_types]):
+            terminal = f.NAMES_TABLE[f.key_word()]
+            self._body += ['keyword', terminal]
+        elif f.token_type() == token_types.IDENTIFIER:
+            self._body += ['identifier', f.identifier()]
+        else:
+            expected = "| ".join(["'{}'".format(typ) for typ in valid_types + ['className']])
+            raise CompileTypeError("Expected {}".format(expected))
 
     def add_keywords(self, keywords, step=True):
         """Add keyword(s) definition to body element."""
@@ -218,7 +431,7 @@ class CompilationEngine:
             self._body += ['keyword', terminal]
         else:
             expected = "| ".join(["'{}'".format(key) for key in keywords])
-            raise CompileKeyError("Expected {}".format(expected))
+            raise CompileKeywordError("Expected {}".format(expected))
 
     def add_symbols(self, symbols, step=True):
         """Add symbol definition to body element."""
@@ -231,7 +444,7 @@ class CompilationEngine:
             self._body += ['symbol', f.symbol()]
         else:
             expected = "| ".join(["'{}'".format(sym) for sym in symbols])
-            raise CompileError("Expected {}".format(expected))
+            raise CompileSymbolError("Expected {}".format(expected))
 
     def add_identifier(self, identifier, step=True):
         """Add identifier definition to body element."""
@@ -244,26 +457,6 @@ class CompilationEngine:
             self._body += ['identifier', f.identifier()]
         else:
             raise CompileError("Expected a {}", identifier)
-
-    def add_type(self, void=False):
-        """Add a type declaration.
-
-        type: 'int' | 'char' | 'boolean' | className
-        """
-        f = self._infile
-        valid_types = [token_types.INT, token_types.CHAR, token_types.BOOLEAN]
-        if void:
-            valid_types.append(token_types.VOID)
-
-        f.advance()
-        if f.token_type() == token_types.KEYWORD and any([f.key_word() == type_ for type_ in valid_types]):
-            terminal = f.NAMES_TABLE[f.key_word()]
-            self._body += ['keyword', terminal]
-        elif f.token_type() == token_types.IDENTIFIER:
-            self._body += ['identifier', f.identifier()]
-        else:
-            expected = "| ".join(["'{}'".format(typ) for typ in valid_types + ['className']])
-            raise CompileError("Expected {}".format(expected))
 
     def write_terminal(self, element, terminal, indent=False):
         """Write a terminating xml element."""
