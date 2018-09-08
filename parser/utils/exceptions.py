@@ -49,3 +49,19 @@ class CompileOpError(CompileError):
 class CompileKeywordConstantError(CompileError):
     pass
 
+
+class CompileDoError(CompileError):
+    pass
+
+
+class CompileSubroutineCallError(CompileError):
+    pass
+
+
+class CompileReturnError(CompileError):
+    pass
+
+
+class CompileIfError(CompileError):
+    pass
+

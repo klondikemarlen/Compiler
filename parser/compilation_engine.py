@@ -14,6 +14,10 @@ from parser.utils.exceptions import (
     CompileExpressionError,
     CompileOpError,
     CompileKeywordConstantError,
+    CompileDoError,
+    CompileSubroutineCallError,
+    CompileReturnError,
+    CompileIfError,
 )
 
 
@@ -56,6 +60,7 @@ class CompilationEngine:
         self._outfile = outfile
         self._indent = 0
         self._body = PlusEqualsableIterator()  # iterator of all body elements.
+        self._safe_to_step = True
 
     def compile_class(self):
         """Compiles a complete class.
@@ -86,7 +91,7 @@ class CompilationEngine:
 
         # Since the previous function stepped ahead on fail ...
         # don't step here.
-        self.add_symbols(['}'], step=False)  # step 6 - '}'
+        self.add_symbols(['}'])  # step 6 - '}'
 
         # write end of element body
         self.write_non_terminal_end(current_element)
@@ -118,7 +123,7 @@ class CompilationEngine:
         current_element = "subroutineDec"
 
         # Previous call stepped ahead and extra time so don't step here.
-        self.add_keywords(['constructor', 'function', 'method'], step=False)
+        self.add_keywords(['constructor', 'function', 'method'])
 
         try:
             self.add_type(void=True)
@@ -131,8 +136,8 @@ class CompilationEngine:
 
             # Previous method stepped ahead on fail so don't step here.
             # Needs special write call as this appears between two non-terminals?
-            self.add_symbols([')'], step=False)
-            self.write_terminal(*next(self._body), indent=True)
+            self.add_symbols([')'])
+            self.write_body()
 
             self.compile_subroutine_body()
         except CompileError as ex:
@@ -216,9 +221,11 @@ class CompilationEngine:
 
         self.write_non_terminal_start(current_element)
 
-        # import pdb;pdb.set_trace()
-        # Make first statement of each not step!
-        if f.token_type() == token_types.KEYWORD:
+        if f.token_type() == token_types.SYMBOL and f.symbol() == '{':
+            f.advance()
+            self._safe_to_step = False
+
+        while f.token_type() == token_types.KEYWORD:
             if f.key_word() == token_types.LET:
                 self.compile_let()
             elif f.key_word() == token_types.IF:
@@ -231,16 +238,28 @@ class CompilationEngine:
                 self.compile_return()
             else:
                 raise CompileKeywordError("Expected let | if | while | do | return")
-        else:
-            raise CompileTypeError("Expected a statement")
-        # f.advance()
-        # print("working out statements", f.token)
+            f.advance()
+            self._safe_to_step = False
+            # print("working out statements", f.token)
 
-        # big if tree! plus LL(1)?
         self.write_non_terminal_end(current_element)
 
     def compile_do(self):
-        """Compiles a `do` statement."""
+        """Compiles a `do` statement.
+
+        doStatement: 'do' subroutineCall ';'
+        """
+        current_element = 'doStatement'
+
+        try:
+            self.add_keywords(['do'])
+            self.write_non_terminal_start(current_element)
+
+            self.add_subroutine_call()
+            self.add_symbols([';'])
+        except CompileError as ex:
+            raise CompileDoError("Expected a complete do statement: " + str(ex))
+        self.write_non_terminal_end(current_element)
 
     def compile_let(self):
         """Compiles a `let` statement.
@@ -250,46 +269,95 @@ class CompilationEngine:
 
         current_element = 'letStatement'
 
-        print("working out statements:", self._infile.token)
-
         try:
-            self.add_keywords(['let'], step=False)
+            self.add_keywords(['let'])
             self.add_identifier('variable name')
             self.write_non_terminal_start(current_element)
 
             # optional expression
-            safe_to_step = True
+            expression = True
             try:
-                self.add_symbols('[')
+                self.add_symbols(['['])
+                self.write_body()
             except CompileSymbolError:
-                safe_to_step = False
+                expression = False
 
             # These should run as long as the previous step passes!
-            if safe_to_step:
+            if expression:
                 self.compile_expression()
-                self.add_symbols(']')
+                self.add_symbols([']'])
 
-            # as previous expression might fail - but still advance - don't step?
-            # requires special write method
-            self.add_symbols(['='], step=safe_to_step)
+            self.add_symbols(['='])  # requires special write method
+            self.write_body()
+
+            self.compile_expression()
+            self.add_symbols([';'])
         except CompileError as ex:
-            raise CompileLetError("Expected a complete let statement: ", str(ex))
-        self.write_terminal(*next(self._body), indent=True)
+            raise CompileLetError("Expected a complete let statement: " + str(ex))
 
-        self.compile_expression()
-
-        self.add_symbols([';'])
         self.write_non_terminal_end(current_element)
 
     def compile_while(self):
         """Compiles a `while` statement."""
 
     def compile_return(self):
-        """Compiles a `return` statement."""
+        """Compiles a `return` statement.
+
+        returnStatement: 'return' expression? ';'
+        """
+
+        current_element = 'returnStatement'
+
+        try:
+            self.add_keywords(['return'])
+            self.write_non_terminal_start(current_element)
+
+            try:
+                self.add_symbols([';'])  # if next element is ';', just move on.
+            except CompileSymbolError:  # if it wasn't it should be an expression
+                try:
+                    self.compile_expression()  # optional expression
+                except CompileExpressionError:
+                    pass
+                self.add_symbols([';'])  # followed by a ';'
+        except CompileError as ex:
+            raise CompileReturnError("Expected a complete return statement: " + str(ex))
+        self.write_non_terminal_end(current_element)
 
     def compile_if(self):
         """Compiles an `if` statement, possibly with a trailing `else` clause.
+
+        ifStatement: 'if' '(' expression ')' '{' statements '}' ('else' '{' statements '}')?
         """
+
+        current_element = 'ifStatement'
+        f = self._infile
+
+        try:
+            self.add_keywords(['if'])
+            self.add_symbols(['('])
+            self.write_non_terminal_start(current_element)
+
+            self.compile_expression()
+            self.add_symbols([')'])
+            self.add_symbols(['{'])
+            self.write_body()
+
+            self.compile_statements()
+            self.add_symbols(['}'])
+
+            f.advance()
+            self._safe_to_step = False
+            if f.token_type() == token_types.KEYWORD and f.key_word() == token_types.ELSE:
+                self.add_keywords(['else'])
+                self.add_symbols(['{'])
+                self.write_body()
+                self.compile_statements()
+                self.add_symbols(['}'])
+        except CompileError as ex:
+            raise CompileIfError("Expected a complete if statement: " + str(ex))
+
+        self.write_non_terminal_end(current_element)
 
     def compile_expression(self):
         """Compiles an `expression`.
@@ -306,9 +374,10 @@ class CompilationEngine:
             while True:
                 try:
                     self.add_op_or_unary_op()
-                except CompileSymbolError:
-                    break
-                self.compile_term()
+                    self.write_body()
+                    self.compile_term()
+                except CompileOpError:
+                    break  # no (op term)* exists!
         except CompileError as ex:
             raise CompileExpressionError("Expected a complete expression: " + str(ex))
         self.write_non_terminal_end(current_element)
@@ -321,46 +390,97 @@ class CompilationEngine:
         term: integerConstant | stringConstant | keywordConstant | varName | varName '[' expression ']' | subroutineCall | '(' expression ')' | unaryOp term
         """
         f = self._infile
+        current_element = "term"
+        self.write_non_terminal_start(current_element)
 
-        f.advance()
+        if self._safe_to_step:
+            f.advance()
+            self._safe_to_step = False
+
         if f.token_type() == token_types.INT_CONST:
             self._body += ['integerConstant', f.int_const()]
         elif f.token_type() == token_types.STRING_CONST:
             self._body += ['stringConstant', f.int_const()]
         elif f.token_type() == token_types.KEYWORD:
-            self.add_keyword_constant(step=False)
+            self.add_keyword_constant()
         elif f.token_type() == token_types.IDENTIFIER:
-            # detect subroutine call!
-
-            # save current state ... read ahead 1 ?
-            self.add_identifier('variable name')
-            try:
-                self.add_symbols('[')
-                self.compile_expression()
-                self.add_symbols(']')
-            except CompileSymbolError:
-                pass  # safe_to_step=False?
+            self.add_identifier('variable name | subroutine name | class name')
+            f.advance()
+            self._safe_to_step = False
+            if f.token_type() == token_types.SYMBOL:
+                if f.symbol() == '[':
+                    self.add_symbols(['['])  # requires special write
+                    self.write_body()
+                    self.compile_expression()
+                    self.add_symbols([']'])
+                elif f.symbol() == '(':
+                    self.add_symbols(['('])  # requires special write
+                    self.write_body()
+                    self.compile_expression_list()
+                    self.add_symbols([')'])
+                elif f.symbol() == '.':
+                    self.add_subroutine_call()
         elif f.token_type() == token_types.SYMBOL:
             if f.symbol() == '(':
-                self.add_symbols('(')
+                self.add_symbols(['('])
                 self.compile_expression()
-                self.add_symbols(')')
+                self.add_symbols([')'])
             elif f.symbol() in ['-', '~']:
                 self.add_op_or_unary_op(unary=True)
                 self.compile_term()
 
+        self.write_non_terminal_end('term')
+
     def compile_expression_list(self):
-        """Compiles a (possibly empty) comma-separated list of expressions."""
+        """Compiles a (possibly empty) comma-separated list of expressions.
+
+        (expression (',' expression)*)?
+        """
+        current_element = 'expressionList'
+        f = self._infile
+
+        self.write_non_terminal_start(current_element)
+        if self._safe_to_step:
+            f.advance()
+            self._safe_to_step = False
+
+        while f.token_type() == token_types.SYMBOL and f.symbol() != ')' or f.token_type() != token_types.SYMBOL:  # might need modification?
+            try:
+                self.compile_expression()
+            except CompileExpressionError:
+                break
+
+            try:
+                self.add_symbols([','])
+                self.write_body()
+            except CompileSymbolError:
+                break
+
+        self.write_non_terminal_end(current_element)
 
     def add_subroutine_call(self):
         """Add a subroutine call.
 
         subroutineCall: subroutineName '(' expressionList ')' | (className | varName) '.' subroutineName '(' expressionList ')'
         """
+        f = self._infile
 
-    def add_keyword_constant(self, step=True):
         try:
-            self.add_keywords(['true', 'false', 'null', 'this'], step=step)
+            self.add_identifier('subroutine name | class name | variable name')  # requires special write
+            self.add_symbols(['(', '.'])  # requires special write
+            self.write_body()
+            if f.token_type() == token_types.SYMBOL:
+                if f.symbol() == '(':
+                    self.compile_expression_list()
+                    self.add_symbols([')'])
+                elif f.symbol() == '.':
+                    self.add_subroutine_call()
+        except CompileError as ex:
+            raise CompileSubroutineCallError("Expected a complete subroutine call: " + str(ex))
+
+    def add_keyword_constant(self):
+        try:
+            self.add_keywords(['true', 'false', 'null', 'this'])
         except CompileError as ex:
             raise CompileKeywordConstantError("Expected a keyword constant: ", str(ex))
 
@@ -397,7 +517,7 @@ class CompilationEngine:
             else:
                 self.add_identifier('variable name')
 
-    def add_type(self, void=False, step=True):
+    def add_type(self, void=False):
         """Add a type declaration.
 
         type: 'int' | 'char' | 'boolean' | className
@@ -407,56 +527,70 @@ class CompilationEngine:
         if void:
             valid_types.append(token_types.VOID)
 
-        if step:
+        if self._safe_to_step:
             f.advance()
+            self._safe_to_step = False
 
         if f.token_type() == token_types.KEYWORD and any([f.key_word() == type_ for type_ in valid_types]):
             terminal = f.NAMES_TABLE[f.key_word()]
             self._body += ['keyword', terminal]
+            self._safe_to_step = True
         elif f.token_type() == token_types.IDENTIFIER:
             self._body += ['identifier', f.identifier()]
+            self._safe_to_step = True
         else:
             expected = "| ".join(["'{}'".format(typ) for typ in valid_types + ['className']])
             raise CompileTypeError("Expected {}".format(expected))
 
-    def add_keywords(self, keywords, step=True):
+    def add_keywords(self, keywords):
         """Add keyword(s) definition to body element."""
         f = self._infile
 
-        if step:
+        if self._safe_to_step:
             f.advance()
+            self._safe_to_step = False
 
         if f.token_type() == token_types.KEYWORD and any([f.key_word() == f.KEYWORDS_TABLE[key] for key in keywords]):
             terminal = f.NAMES_TABLE[f.key_word()]
             self._body += ['keyword', terminal]
+            self._safe_to_step = True
         else:
             expected = "| ".join(["'{}'".format(key) for key in keywords])
             raise CompileKeywordError("Expected {}".format(expected))
 
-    def add_symbols(self, symbols, step=True):
+    def add_symbols(self, symbols):
         """Add symbol definition to body element."""
         f = self._infile
 
-        if step:
+        if self._safe_to_step:
             f.advance()
+            self._safe_to_step = False
 
         if f.token_type() == token_types.SYMBOL and any([f.symbol() == sym for sym in symbols]):
             self._body += ['symbol', f.symbol()]
+            self._safe_to_step = True
         else:
             expected = "| ".join(["'{}'".format(sym) for sym in symbols])
             raise CompileSymbolError("Expected {}".format(expected))
 
-    def add_identifier(self, identifier, step=True):
+    def add_identifier(self, identifier):
         """Add identifier definition to body element."""
         f = self._infile
 
-        if step:
+        if self._safe_to_step:
             f.advance()
+            self._safe_to_step = False
 
         if f.token_type() == token_types.IDENTIFIER:
             self._body += ['identifier', f.identifier()]
+            self._safe_to_step = True
         else:
             raise CompileError("Expected a {}", identifier)
+
+    def write_body(self):
+        for inner_element, terminal in self._body:  # write all body
+            self._outfile.write(' ' * self._indent)
+            self.write_terminal(inner_element, terminal)
 
     def write_terminal(self, element, terminal, indent=False):
         """Write a terminating xml element."""
@@ -473,12 +607,13 @@ class CompilationEngine:
         print("<{}>".format(element), file=self._outfile)
 
         self._indent += 2  # on every body section increase indent.
-        for inner_element, terminal in self._body:
-            self._outfile.write(' ' * self._indent)
-            self.write_terminal(inner_element, terminal)
+        self.write_body()
 
     def write_non_terminal_end(self, element):
         """Write the end of a non-terminating xml element."""
+
+        # write any trailing body elements.
+        self.write_body()
         self._indent -= 2  # after every body section decrease indent.
         self._outfile.write(' ' * self._indent)
         print("</{}>".format(element), file=self._outfile)
