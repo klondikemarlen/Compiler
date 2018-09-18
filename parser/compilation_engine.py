@@ -18,6 +18,7 @@ from parser.utils.exceptions import (
     CompileSubroutineCallError,
     CompileReturnError,
     CompileIfError,
+    CompileWhileError,
 )
 
 
@@ -200,7 +201,6 @@ class CompilationEngine:
                     self.compile_var_dec()
                 except CompileKeywordError:
                     break
-
             self.compile_statements()
 
             self.add_symbols(['}'])
@@ -238,8 +238,10 @@ class CompilationEngine:
                 self.compile_return()
             else:
                 raise CompileKeywordError("Expected let | if | while | do | return")
-            f.advance()
-            self._safe_to_step = False
+            if self._safe_to_step:
+                f.advance()
+                self._safe_to_step = False
+            # self._safe_to_step = True
             # print("working out statements", f.token)
 
         self.write_non_terminal_end(current_element)
@@ -298,7 +300,27 @@ class CompilationEngine:
         self.write_non_terminal_end(current_element)
 
     def compile_while(self):
-        """Compiles a `while` statement."""
+        """Compiles a `while` statement.
+
+        whileStatement: 'while' '(' expression ')' '{' statements '}
+        """
+
+        current_element = 'whileStatement'
+
+        try:
+            self.add_keywords(['while'])
+            self.add_symbols(['('])
+            self.write_non_terminal_start(current_element)
+            self.compile_expression()
+            self.add_symbols([')'])
+            self.add_symbols(['{'])
+            self.write_body()
+            self.compile_statements()
+            self.add_symbols(['}'])
+        except CompileError as ex:
+            raise CompileWhileError("Exprected a complete while statement: " + str(ex))
+
+        self.write_non_terminal_end(current_element)
 
     def compile_return(self):
         """Compiles a `return` statement.
@@ -398,9 +420,11 @@ class CompilationEngine:
             self._safe_to_step = False
 
         if f.token_type() == token_types.INT_CONST:
-            self._body += ['integerConstant', f.int_const()]
+            self._body += ['integerConstant', f.int_val()]
+            self._safe_to_step = True
         elif f.token_type() == token_types.STRING_CONST:
-            self._body += ['stringConstant', f.int_const()]
+            self._body += ['stringConstant', f.string_val()]
+            self._safe_to_step = True
         elif f.token_type() == token_types.KEYWORD:
             self.add_keyword_constant()
         elif f.token_type() == token_types.IDENTIFIER:
@@ -419,15 +443,21 @@ class CompilationEngine:
                     self.compile_expression_list()
                     self.add_symbols([')'])
                 elif f.symbol() == '.':
+                    self.add_symbols(['.'])
+                    self.write_body()
                     self.add_subroutine_call()
         elif f.token_type() == token_types.SYMBOL:
             if f.symbol() == '(':
-                self.add_symbols(['('])
+                self.add_symbols(['('])  # requires special write
+                self.write_body()
                 self.compile_expression()
                 self.add_symbols([')'])
             elif f.symbol() in ['-', '~']:
-                self.add_op_or_unary_op(unary=True)
+                self.add_op_or_unary_op(unary=True)  # requires special write
+                self.write_body()
                 self.compile_term()
+            # else:
+            #     raise CompileTermError("")
 
         self.write_non_terminal_end('term')
 
@@ -467,7 +497,10 @@ class CompilationEngine:
 
         try:
             self.add_identifier('subroutine name | class name | variable name')  # requires special write
+            # try:
             self.add_symbols(['(', '.'])  # requires special write
+            # except CompileSymbolError:
+            #     pass  # I guess there was no period after all!
             self.write_body()
             if f.token_type() == token_types.SYMBOL:
                 if f.symbol() == '(':
@@ -482,18 +515,20 @@ class CompilationEngine:
         try:
             self.add_keywords(['true', 'false', 'null', 'this'])
         except CompileError as ex:
-            raise CompileKeywordConstantError("Expected a keyword constant: ", str(ex))
+            raise CompileKeywordConstantError("Expected a keyword constant: " + str(ex))
 
     def add_op_or_unary_op(self, unary=False):
         """Add an operator (symbol).
 
         op: '+' | '-' | '*' | '/' | '&' | '|' | '<' | '>' | '='
         """
+        f = self._infile
+
         try:
             if unary:
                 self.add_symbols(['-', '~'])
             else:
-                self.add_symbols(['+', '-', '*', '/', '&', '|', '<', '>', '='])
+                self.add_symbols((f.XML_ESCAPES[char] if char in f.XML_ESCAPES else char for char in ['+', '-', '*', '/', '&', '|', '<', '>', '=']))
         except CompileError as ex:
             raise CompileOpError("Expected an operator: " + str(ex))
 
@@ -585,7 +620,7 @@ class CompilationEngine:
             self._body += ['identifier', f.identifier()]
             self._safe_to_step = True
         else:
-            raise CompileError("Expected a {}", identifier)
+            raise CompileError("Expected a {}".format(identifier))
 
     def write_body(self):
         for inner_element, terminal in self._body:  # write all body

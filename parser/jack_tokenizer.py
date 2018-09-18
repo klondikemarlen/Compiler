@@ -1,5 +1,4 @@
 import itertools
-from xml.sax.saxutils import escape
 
 from .utils import token_types
 from .utils import patterns
@@ -65,6 +64,12 @@ class JackTokenizer:
         token_types.FALSE: 'false',
         token_types.NULL: 'null',
         token_types.THIS: 'this',
+    }
+
+    XML_ESCAPES = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
     }
 
     def __init__(self, file):
@@ -212,7 +217,7 @@ class JackTokenizer:
             except KeyError:
                 pass
 
-            valid_xml_char = escape(self.token)
+            valid_xml_char = self.XML_ESCAPES[self.token] if self.token in self.XML_ESCAPES else self.token
             self.token_cache[self.token] = {"symbol": valid_xml_char}
             return valid_xml_char
         else:

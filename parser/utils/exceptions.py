@@ -65,3 +65,6 @@ class CompileReturnError(CompileError):
 class CompileIfError(CompileError):
     pass
 
+
+class CompileWhileError(CompileError):
+    pass
